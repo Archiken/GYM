@@ -26,8 +26,6 @@ def draw_on_frame(frame, results_1, results_2, frame_count):
     direction2 = pos_p3 - pos_p2
     direction_norm2 = direction2 / np.linalg.norm(direction2)
 
-    end_point = pos_p1 + direction_norm1 * 240
-    end_point = tuple(end_point.astype(int))  # 轉換為整數，OpenCV 需要整數座標
     # 定義 3D 座標系統中的點
     P0 = np.array([0, 0, 0])
     P1 = np.array([0, 0, 275])
@@ -183,7 +181,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count):
         d2 = np.dot(relative_vec, direction_norm2)
         
         # 計算每個點在 rot_square 平面上的投影
-        projection_point = rot_origin - d1 * v2/2 + d2 * v1/2
+        projection_point = rot_origin + d1 * v2/2 + d2 * v1/2
         # projection_point = rot_origin - d1 * v2 + d2 * v1
         projections[name] = projection_point
         print(f"{name}_projection:", projection_point)
@@ -214,7 +212,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count):
     azim_angle = frame_count * rotation_speed
     # 設置 3D 圖形的視角
     ax.view_init(elev=10, azim=azim_angle)  # 設定仰角和方位角
-    ax_left.view_init(elev=0, azim=45)
+    ax_left.view_init(elev=0, azim=225)
 
     # 繪製 3D 點    
     ax.scatter(*P0, c='r', label='P0')

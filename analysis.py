@@ -60,5 +60,5 @@ def process_video(input_video_path , output_type="video", output_path="output.mp
         print(f"Video saved to {output_path}")
 
 # 示例调用
-# process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="image", output_path="/app/inference_result/frame_175_analysis.jpg", frame_number=175)
-process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="video", output_path="/app/inference_result/Tang_output_3drot2.mp4")
+process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="image", output_path="/app/inference_result/frame_400_analysis.jpg", frame_number=400)
+# process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="video", output_path="/app/inference_result/Tang_output_3drot2.mp4")
