@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from geometry_visualization import draw_on_frame  # 從繪製模組導入函數
+from geometry_visualization import draw_on_frame, draw_on_frame_with_plot  # 從繪製模組導入函數
+import csv
+import time
+
+start_time = time.time()
 
 def process_video(input_video_path , output_type="video", output_path="output.mp4", frame_number=None):
     # 加载模型
@@ -26,7 +30,15 @@ def process_video(input_video_path , output_type="video", output_path="output.mp
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
 
+    # with open('rot_origin_output25.csv', mode='w', newline='') as file:
+    #     writer = csv.writer(file)
+    #     writer.writerow(['Frame', 'rot_velocity', 'smoothed_velocity_3', 'smoothed_velocity_5'])
+
     frame_count = 0
+    rot_origin_last = None  # 初始化上一幀的 rot_origin
+    rot_proj_last = None
+    R_hip_last_angle = None
+    R_ankle_last_angle = None
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -42,7 +54,21 @@ def process_video(input_video_path , output_type="video", output_path="output.mp
         results_2 = model_2(frame)
 
         # 使用分析繪製模組進行繪製
-        frame = draw_on_frame(frame, results_1, results_2, frame_count)
+        frame, rot_origin, rot_origin_proj, R_hip_angle, hip_smoothed, R_ankle_last_angle, ankle_smoothed = draw_on_frame(frame, results_1, 
+        results_2, frame_count, rot_origin_last, rot_proj_last, R_hip_last_angle, R_ankle_last_angle)
+
+        R_hip_last_angle = R_hip_angle #更新後下次傳回去用
+        R_ankle_last_angle = R_ankle_last_angle
+        rot_origin_last = rot_origin #更新後下次傳回去用
+        rot_proj_last = rot_origin_proj #更新後下次傳回去用
+
+        frame = draw_on_frame_with_plot(frame, hip_smoothed, ankle_smoothed)
+
+        # 打開 CSV 文件並以追加模式寫入新數據
+        # with open('rot_speed.csv', mode='a', newline='') as file:
+        #     writer = csv.writer(file)
+        #     # 寫入當前幀數的...
+        #     writer.writerow([frame_count, hip_ang_velocity, hip_smoothed])
 
         if output_type == "image":
             cv2.imwrite(output_path, frame)
@@ -60,5 +86,9 @@ def process_video(input_video_path , output_type="video", output_path="output.mp
         print(f"Video saved to {output_path}")
 
 # 示例调用
-process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="image", output_path="/app/inference_result/frame_400_analysis.jpg", frame_number=400)
-# process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="video", output_path="/app/inference_result/Tang_output_3drot2.mp4")
+# process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="image", output_path="/app/inference_result/frame_534_analysis.jpg", frame_number=534)
+process_video(input_video_path= '/app/TANG_Chia-Hung.mp4', output_type="video", output_path="/app/inference_result/TANG_Chia-Hung_3drot.mp4")
+
+end_time = time.time()
+elapsed_time = end_time - start_time
+print(f"程序運行: {elapsed_time:.2f} 秒")
