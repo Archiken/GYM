@@ -16,11 +16,16 @@ def draw_keypoint(frame, pos, label, color=(255, 255, 0), font_size=1.2, font_th
                 cv2.FONT_HERSHEY_SIMPLEX, font_size, color, font_thickness, cv2.LINE_AA)
     
 
-hip_buffer = [] 
-ankle_buffer = []
-buffer_size = 5
+COG_buffer = [] 
+buffer_size = 3
+COG_flight_height = []
+COG_smoothed_history = []
+COG_angle_history = []
+display_buffer = 70
 
-def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot_proj_last, R_hip_last_angle, R_ankle_last_angle):
+def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot_proj_last,
+                  COG_last_angle, flight_last_vel, COG_last_height, COG_last_cal_height,
+                  frame_data_table, COG_flight_height_frames):
     # 取得關鍵點位置
     keypoints_2 = results_2[0].keypoints.xy.cpu().numpy().tolist()[0]
     pos_p0 = np.array((int(keypoints_2[0][0]), int(keypoints_2[0][1])))
@@ -29,11 +34,6 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
     pos_p3 = np.array((int(keypoints_2[3][0]), int(keypoints_2[3][1])))
     pos_m1 = np.array((int(keypoints_2[4][0]), int(keypoints_2[4][1])))
     pos_m2 = np.array((int(keypoints_2[5][0]), int(keypoints_2[5][1])))
-    # print(f"Distance between pos_p0 and pos_p1: {np.linalg.norm(pos_p1 - pos_p0)}")
-    # print("pos_p0:", pos_p0)
-    # print("pos_p1:", pos_p1)
-    # print("pos_p2:", pos_p2)
-    # print("pos_p3:", pos_p3)
     
     direction1 = pos_m2 - pos_m1
     direction_norm1 = direction1 / np.linalg.norm(direction1)
@@ -46,7 +46,6 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
     P1 = np.array([0, 0, 275])
     P2 = np.array([144, 192, 275])
     P3 = np.array([144, 192, 0])
-    # print("P3:", P3)
 
     # 在影像上繪製點
     cv2.circle(frame, tuple(pos_p0), 5, (0, 0, 255), -1)  # P0 紅色
@@ -63,6 +62,18 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
     keypoints_1 = results_1[0].keypoints.xy.cpu().numpy().tolist()[0]
     R_hand = np.array((int(keypoints_1[8][0]), int(keypoints_1[8][1])))
 
+    # 定義質量百分比
+    mass_percentage = {
+        'head': 0.082,      # 頭部
+        'torso': 0.4684,    # 軀幹
+        'uarm': 0.065,      # 上臂
+        'larm': 0.036,      # 前臂
+        'hand': 0.013,      # 手
+        'thigh': 0.21,      # 大腿
+        'calf': 0.095,      # 小腿
+        'foot': 0.0286      # 腳
+    }
+
     points = {
     'head': np.array((int(keypoints_1[0][0]), int(keypoints_1[0][1]))),
     'CT': np.array((int(keypoints_1[1][0]), int(keypoints_1[1][1]))),
@@ -73,6 +84,40 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
     'R_shoulder': np.array((int(keypoints_1[6][0]), int(keypoints_1[6][1]))),
     'R_elbow': np.array((int(keypoints_1[7][0]), int(keypoints_1[7][1]))),
     'R_hand': np.array((int(keypoints_1[8][0]), int(keypoints_1[8][1])))}
+    
+    # 計算各個肢段的重心位置
+    head = points['head']
+    torso = points['TL']
+    uarm = (points['R_shoulder'] + points['R_elbow']) / 2
+    larm = (points['R_elbow'] + points['R_hand']) / 2
+    hand = points['R_hand']
+    thigh = (points['R_hip'] + points['R_knee']) / 2
+    calf = (points['R_knee'] + points['R_ankle']) / 2
+    foot = points['R_ankle']
+
+    # 加權平均計算 COG
+    COG_x = (mass_percentage['head'] * head[0] +
+            mass_percentage['torso'] * torso[0] +
+            mass_percentage['uarm'] * uarm[0] +
+            mass_percentage['larm'] * larm[0] +
+            mass_percentage['hand'] * hand[0] +
+            mass_percentage['thigh'] * thigh[0] +
+            mass_percentage['calf'] * calf[0] +
+            mass_percentage['foot'] * foot[0]) / sum(mass_percentage.values())
+
+    COG_y = (mass_percentage['head'] * head[1] +
+            mass_percentage['torso'] * torso[1] +
+            mass_percentage['uarm'] * uarm[1] +
+            mass_percentage['larm'] * larm[1] +
+            mass_percentage['hand'] * hand[1] +
+            mass_percentage['thigh'] * thigh[1] +
+            mass_percentage['calf'] * calf[1] +
+            mass_percentage['foot'] * foot[1]) / sum(mass_percentage.values())
+
+    COG = np.array([int(COG_x), int(COG_y)])  # 最終 COG 取整數
+    points['COG'] = COG
+
+
     
     # 找到手的投影點 hand_proj
     # 計算直線方程的斜率和截距
@@ -90,12 +135,8 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
 
 
     hand_proj = hand_proj.astype(int)
-    # print("R_hand:", R_hand)
-    # print("hand_proj:", hand_proj)
     Dis = R_hand[1] - hand_proj[1]
     # 标注 rot_origin 的 3D 坐标
-    # draw_keypoint(frame, (5, 900), f"Dis: {Dis}", color=(255, 255, 255), draw_circle=False)
-    # print("Distance:", Dis)
     # 定義顏色
     colors_2d = {
         'head': (65, 66, 136),
@@ -107,6 +148,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
         'R_shoulder': (222, 239, 183),
         'R_elbow': (222, 239, 183),
         'R_hand': (222, 239, 183),
+        'COG': (0,0,220)
     }
     
     # 在畫面上繪製每個點
@@ -154,18 +196,12 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
 
     
     rot_origin_proj = rot_origin_proj.astype(int)  # 將數值轉換為整數
-    # draw_keypoint(frame, (5, 945), f"rot_origin: {rot_origin}", color=(0, 255, 255), draw_circle=False)
-    # if rot_origin_last is not None:
-    #     draw_keypoint(frame, (5, 990), f"origin-last: {rot_origin[0] - rot_origin_last[0]}", color=(255, 0, 255), draw_circle=False)
-    # else:
-    #     draw_keypoint(frame, (5, 990), "origin-last: N/A", color=(255, 0, 255), draw_circle=False)
     cv2.circle(frame, tuple(rot_origin_proj), 5, (255, 0, 0), -1)  
-    # print("rot_origin:", rot_origin)
         
 
-    # ---- 在畫面右下角繪製 3D 點與連線 ---- #
-    # 設置右下角繪圖區域 (600x600)
-    sub_frame_height = 600
+    # ---- 在畫面右上角繪製 3D 點與連線 ---- #
+    # 設置右上角繪圖區域
+    sub_frame_height = 500
     sub_frame_width = 600
 
     # 計算平面的法向量 (P2 - P1)
@@ -200,6 +236,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
         'R_shoulder': (222/255, 239/255, 183/255),
         'R_elbow': (222/255, 239/255, 183/255),
         'R_hand': (222/255, 239/255, 183/255),
+        'COG': (220/255, 0/255, 0/255),
     }
     # 計算每個點需要移動的 d1 和 d2
     # 計算每個點的投影
@@ -220,7 +257,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
         projections[name] = projection_point
         # print(f"{name}_projection:", projection_point)
     # 創建 Matplotlib 圖像
-    fig = plt.figure(figsize=(6, 6), dpi=100)
+    fig = plt.figure(figsize=(6, 5), dpi=100)
     ax = fig.add_subplot(111, projection='3d') 
 
     # 繪製正方形（rot_square）
@@ -264,11 +301,11 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
 
     # 處理右上角圖像
     # 添加需要的繪圖內容到ax
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    ax.set_zlabel('')
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.1)
+    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
     plt.close(fig)
     buf.seek(0)
     plot_img = np.array(Image.open(buf))
@@ -278,7 +315,7 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
 
     
     #-------左上角角度-------
-    # 左上角原點 (300, 300)
+    # 左上角原點 (300, 250)
     origin = np.array([300, 250])
     # 設定幀率
     fps = 30  # 幀率 (frames per second)
@@ -291,85 +328,208 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
     # 混合 overlay 和 frame，實現透明效果
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
     # 在淺綠色矩形外圍加一個黑色邊框
-    cv2.rectangle(frame, (0, 0), (600, 500), (0, 0, 0), 2)  # 2 為邊框寬度
-    # 從 (300, 300) 到 (300, 600) 繪製紅線
+    cv2.rectangle(frame, (0, 0), (600, 500), (0, 0, 0), 3)  # 3 為邊框寬度
+    # 從 (300, 250) 到 (300, 500) 繪製紅線
     cv2.line(frame, (300, 250), (300, 500), (0, 0, 255), 2)  # 紅線，線寬 2
 
     # 計算每個投影點在 2D 畫面上的位置
     projected_points_2D = {}
     for name, proj_point in points.items():
-        # 以 (300, 300) 為原點，根據 d1 和 d2 確定每個點的位置
+        # 以 (300, 250) 為原點，根據 d1 和 d2 確定每個點的位置
         relative_vec = proj_point - rot_origin_proj
         d1 = np.dot(relative_vec, direction_norm1)
         d2 = np.dot(relative_vec, direction_norm2)
-        x = int(origin[0] - d1/2.1)  # 水平方向的位移
-        y = int(origin[1] + d2/2.1)  # 垂直方向的位移
+        x = int(origin[0] - d1/2.2)  # 水平方向的位移
+        y = int(origin[1] + d2/2.2)  # 垂直方向的位移
         projected_points_2D[name] = (x, y)
     
-    R_hip = projected_points_2D['R_hip']
-    R_ankle = projected_points_2D['R_ankle']
+    COG = projected_points_2D['COG']
+    Dis_COG = np.linalg.norm(np.array(COG) - origin)
 
-    # 計算當前幀 R_hip 相對於 origin 的角度
-    hip_vector = np.array(R_hip) - origin
-    R_hip_angle = np.arctan2(hip_vector[1], hip_vector[0])  # 反正切計算角度，弧度制
-    R_hip_angle = np.degrees(R_hip_angle)  # 將弧度轉換為度數
-    # 將角度範圍從 [-180, 180] 轉換到 [0, 360]
-    if R_hip_angle < 0:
-        R_hip_angle += 360
+    COG_vector = np.array(COG) - origin
+    COG_distance = np.linalg.norm(COG_vector)
+    
+    COG_angle = np.arctan2(COG_vector[1], COG_vector[0])
+    COG_angle = np.degrees(COG_angle)
+    if COG_angle < 0:
+        COG_angle += 360
 
-    hip_vector = np.array(R_ankle) - origin
-    R_ankle_angle = np.arctan2(hip_vector[1], hip_vector[0])  # 反正切計算角度，弧度制
-    R_ankle_angle = np.degrees(R_ankle_angle)  # 將弧度轉換為度數
-    if R_ankle_angle < 0:
-        R_ankle_angle += 360
+    # draw_keypoint(frame, (1200, 900), f"COG_angle: {COG_angle}", color=(0, 255, 255), draw_circle=False)
+    # 儀表板設定
+    center = (540, 950)
+    radius = 120
+    pointer_length = 115
+    color_yellow = (99, 213, 255)
+    
+    # 繪製儀表板背景
+    cv2.rectangle(frame, (400, 780), (680, 1080), (255, 255, 255), -1)
+    cv2.circle(frame, center, radius, (0, 0, 0), 2)
+    cv2.putText(frame, 'COG angular position', (418 , 805),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.73, (0, 0, 0), 1, cv2.LINE_AA)
+    cv2.putText(frame, '3D Estimation', (1515 , 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, '2D Projection', (170 , 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2, cv2.LINE_AA)
+    draw_keypoint(frame, (680 , 5), "2024 Baku World Cup", color=(255, 255, 255), draw_circle=False)
+    draw_keypoint(frame, (715 , 40), "TANG_Chia-Hung", color=(255, 255, 255), draw_circle=False)
+    
+    # 填充黃色區域
+    overlay = frame.copy()
 
-    hip_ang_velocity = 0
-    hip_smoothed = 0
-    ankle_ang_velocity = 0
-    ankle_smoothed = 0
+    # 計算 300 度到 360 度的圓餅形區域
+    cv2.ellipse(overlay, center, (radius, radius), 0, -60, 0, color_yellow, -1)
+    # 計算 180 度到 240 度的圓餅形區域
+    cv2.ellipse(overlay, center, (radius, radius), 0, -180, -120, color_yellow, -1)
+    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
 
-    # 如果這不是第一幀，則計算角速度
-    if R_hip_last_angle is not None:
-        # 計算髖關節角度變化
-        hip_change_deg = R_hip_angle - R_hip_last_angle
+    # 繪製輔助線 (240度和300度)
+    for angle in [240, 300]:
+        end_x = int(center[0] + radius * np.cos(np.radians(360 - angle)))
+        end_y = int(center[1] - radius * np.sin(np.radians(360 - angle)))
+        cv2.line(frame, center, (end_x, end_y), (0, 0, 0), 1)
+    
+    # 標記角度
+    for angle in range(0, 360, 30):
+        x = int(center[0] + (radius + 5) * np.cos(np.radians(360 - angle)))
+        y = int(center[1] - (radius + 5) * np.sin(np.radians(360 - angle)))
+        cv2.circle(frame, (x, y), 2, (0, 0, 0), -1)
+    
+    # 繪製指針
+    angle_rad = np.radians(360 - COG_angle)
+    end_x = int(center[0] + pointer_length * np.cos(angle_rad))
+    end_y = int(center[1] - pointer_length * np.sin(angle_rad))
+    cv2.line(frame, center, (end_x, end_y), (0, 0, 220), 2)
+    
+    COG_ang_velocity = 0
+    COG_smoothed = 0
+    COG_tangential_vel = 0
+    flight_vel = 0
+    COG_cal_height = 0
+    COG_height = 0
+    COG_vertical_vel = 0
 
-        # 防止角度跳變，可以將角度歸一化到 [-180, 180] 範圍
-        hip_change_deg = (hip_change_deg + 180) % 360 - 180
+    if COG_last_angle is not None:
+        COG_change_deg = COG_angle - COG_last_angle
+        COG_change_deg = (COG_change_deg +180) % 360 - 180
 
-        # 計算角速度 (角度變化除以每幀的時間)
-        hip_ang_velocity = hip_change_deg / time_per_frame
-        hip_ang_velocity = round(hip_ang_velocity, 1)
+        COG_ang_velocity = COG_change_deg / time_per_frame
+        COG_ang_velocity = round(COG_ang_velocity, 1)
 
-        # 將角速度添加到緩衝區
-        hip_buffer.append(hip_ang_velocity)
-        if len(hip_buffer) > buffer_size:
-            hip_buffer.pop(0)  # 移除最舊的角速度數據
-        # 平滑角速度，取緩衝區內所有角速度的平均值
-        hip_smoothed = round(np.mean(hip_buffer), 1)
+        COG_buffer.append(COG_ang_velocity)
+        if len(COG_buffer) > buffer_size:
+            COG_buffer.pop(0)
+        COG_smoothed = round(abs(np.mean(COG_buffer)), 1)
 
-        # draw_keypoint(frame, (5, 545), f"Angular velocity: {hip_ang_velocity} degrees/s", color=(255, 255, 255), draw_circle=False)
-        # draw_keypoint(frame, (5, 590), f"smoothed_velocity3: {hip_smoothed} degrees/s", color=(255, 255, 255), draw_circle=False)
-        # print(f"Angular velocity of R_hip: {hip_ang_velocity} degrees/s")
-        # 計算踝關節角度變化
-        ankle_change_deg = R_ankle_angle - R_ankle_last_angle
+        # 計算 COG 的瞬時速度
+        COG_tangential_vel = COG_smoothed * (np.pi / 180) * COG_distance * 1.08  # 單位取決於角速度的單位（如度/秒或弧度/秒）
+        COG_vertical_vel = round(abs(COG_tangential_vel * np.cos(np.radians(COG_angle))), 1)
+        last_update_frame = None
 
-        # 防止角度跳變，可以將角度歸一化到 [-180, 180] 範圍
-        ankle_change_deg = (ankle_change_deg + 180) % 360 - 180
+        if flight_last_vel is not None:
+            # 條件一：COG_last_angle 小於 40 度，且 COG_angle 大於 330 度
+            if COG_last_angle < 40 and COG_angle > 330:
+                flight_vel = COG_vertical_vel
 
-        # 計算角速度 (角度變化除以每幀的時間)
-        ankle_ang_velocity = ankle_change_deg / time_per_frame
-        ankle_ang_velocity = round(ankle_ang_velocity, 1)
+            # 條件二：COG_last_angle 小於180 度，且 COG_angle 大於 180 度
+            elif COG_last_angle < 180 and COG_angle > 180:
+                flight_vel = COG_vertical_vel
 
-        # 將角速度添加到緩衝區
-        ankle_buffer.append(ankle_ang_velocity)
-        if len(ankle_buffer) > buffer_size:
-            ankle_buffer.pop(0)  # 移除最舊的角速度數據
-        # 平滑角速度，取緩衝區內所有角速度的平均值
-        ankle_smoothed = round(np.mean(ankle_buffer), 1)
+            # 新條件三：COG_angle 大於 300，且 COG_angle 小於 COG_last_angle(逆轉)，且 flight_last_vel 小於 COG_vertical_vel
+            elif COG_angle > 300 and COG_angle < COG_last_angle and flight_last_vel < COG_vertical_vel:
+                flight_vel = COG_vertical_vel
 
-    # 更新上一幀的角度為當前幀的角度
-    R_hip_last_angle = R_hip_angle
-    R_ankle_last_angle = R_ankle_angle
+            # 新條件四：COG_angle 小於 240，且 COG_angle 大於 COG_last_angle(順轉)，且 flight_last_vel 小於 COG_vertical_vel
+            elif 180 <= COG_angle < 240 and COG_angle > COG_last_angle and flight_last_vel < COG_vertical_vel:
+                flight_vel = COG_vertical_vel
+
+            else:
+                flight_vel = flight_last_vel
+            
+            # 條件：計算 COG_cal_height 當 COG_angle < 300 且 COG_angle < COG_last_angle
+            if COG_angle < 300 and 270 < COG_angle < COG_last_angle:
+                COG_cal_height = (flight_vel ** 2) / (19.6 * 1.08)
+                last_update_frame = frame_count  # 記錄此時的 frame_count
+
+            # 條件：計算 COG_cal_height 當 COG_angle > 240 且 COG_angle > COG_last_angle
+            elif (COG_angle > 240 and COG_angle > COG_last_angle >= 180) or (Dis_COG > 150):
+                COG_cal_height = (flight_vel ** 2) / (19.6 * 1.08)
+                last_update_frame = frame_count  # 記錄此時的 frame_count
+
+            else:
+                COG_cal_height = COG_last_cal_height
+
+            # draw_keypoint(frame, (1200, 500), f"COG_tangential_vel: {COG_tangential_vel}", color=(255, 255, 255), draw_circle=False)
+            # draw_keypoint(frame, (1200, 550), f"COG_vertical_vel: {COG_vertical_vel}", color=(255, 255, 255), draw_circle=False)
+            # draw_keypoint(frame, (1200, 600), f"flight_vel: {flight_vel}", color=(255, 255, 255), draw_circle=False)
+            # draw_keypoint(frame, (1200, 650), f"COG_cal_height: {COG_cal_height}", color=(255, 255, 255), draw_circle=False)
+
+        # 更新 COG_height 當 COG 角度跨越 270 度時
+        if (200 < COG_last_angle < 270 and COG_angle >= 270) or (COG_last_angle > 270 and 200 < COG_angle <= 270):
+            COG_height = (500 - COG[1]) * 1.08  # 更新 COG_height 為當前 COG 的 y 值
+        else: 
+            COG_height = COG_last_height
+
+
+    ###------右下角高度表示------___________________________________________________________________________________________________________________________________
+    # 提取 CT 和 COG 的 y 座標
+    CT_2dy = projected_points_2D['CT'][1]  # CT 的 y 座標 
+    TL_2dy = projected_points_2D['TL'][1]  # COG 的 y 座標
+    # 設置條件並更新 COG_flight_height 列表
+    if CT_2dy < TL_2dy and 240 < COG_angle < 300 or CT_2dy < TL_2dy and Dis_COG > 150: 
+        if len(COG_flight_height) == 0 or COG_cal_height != COG_flight_height[-1]:
+            COG_flight_height.append(COG_cal_height)
+            
+        # 確保 COG_flight_height 的長度不超過 7
+        if len(COG_flight_height) > 7:
+            COG_flight_height.pop(0)
+
+        # 更新 COG_flight_height_frames 列表，將 last_update_frame 加入其中
+        if last_update_frame is not None:
+            COG_flight_height_frames.append(last_update_frame)
+        
+        # 更新數據暫存表
+        frame_data_table[frame_count] = {
+            "COG_cal_height": COG_cal_height,
+            "COG_angle": COG_angle,
+            "COG_vertical_vel": COG_vertical_vel
+        }
+
+    # 創建右下角COG_flight_height 圖形圖像
+    fig, ax = plt.subplots(figsize=(7, 3), dpi=100)
+
+    # 繪製 COG_flight_height 折線圖
+    ax.plot(range(1, len(COG_flight_height) + 1), COG_flight_height, color='b', marker='o')  # 使用藍色線條並添加標記點
+    ax.set_ylim(6000, 13000)  # 設定縱軸範圍
+    ax.set_xlim(0, 8)         # 設定橫軸範圍
+
+    # 設置縱軸標示
+    ax.set_yticks(np.arange(7000, 13001, 2000))
+
+    # 標題
+    ax.set_title("Velocity Calculate COG Flight Height", fontsize=15)
+    ax.set_xticks(range(1, 9))
+    ax.set_xticklabels([str(i) for i in range(1, 9)])
+    ax.set_xlabel("Flips", fontsize=15)  # 設定 x 軸標籤
+    ax.set_ylabel("Height", fontsize=15)  # 設定 y 軸標籤
+    ax.tick_params(axis='x', labelsize=15)
+    ax.tick_params(axis='y', labelsize=15)
+
+    # 將圖像保存到內存中
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.1)  # 不要加額外的邊距
+    plt.close(fig)
+    buf.seek(0)
+
+    # 讀取並嵌入到 OpenCV 圖像框架中
+    plot_img = np.array(Image.open(buf))
+    plot_img = cv2.cvtColor(plot_img, cv2.COLOR_RGB2BGR)
+
+    # 確保 plot_img 的大小為 (300, 700)
+    plot_img_resized = cv2.resize(plot_img, (600, 300))  # 調整為 600x300 大小
+
+    # 嵌入到原始影像的右下角
+    frame[frame.shape[0]-300:frame.shape[0], frame.shape[1]-600:frame.shape[1]] = plot_img_resized
+
     
     # 定义每组关节的颜色（BGR 格式）
     colors_bgr = {
@@ -381,7 +541,9 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
         'R_ankle': (156, 180, 95),
         'R_shoulder': (183, 239, 222),
         'R_elbow': (183, 239, 222),
-        'R_hand': (183, 239, 222),}
+        'R_hand': (183, 239, 222),
+        'COG': (0, 0, 220),
+        }
     
     # 在图像上绘制每个点
     for name, (x, y) in projected_points_2D.items():
@@ -394,41 +556,49 @@ def draw_on_frame(frame, results_1, results_2, frame_count, rot_origin_last, rot
         end_point = projected_points_2D[end]
         cv2.line(frame, start_point, end_point, (0, 0, 0), 2)  # 黑色线条，线宽 2
 
-    return frame, rot_origin,  rot_origin_proj, R_hip_last_angle, hip_smoothed, R_ankle_last_angle, ankle_smoothed
 
-hip_smoothed_history = []
-ankle_smoothed_history = []
-display_buffer = 70
-def draw_on_frame_with_plot(frame, hip_smoothed, ankle_smoothed):
-    # 將 hip_smoothed 添加到歷史數據緩衝區
-    hip_smoothed_history.append(abs(hip_smoothed))  # 保存絕對值
-    if len(hip_smoothed_history) > display_buffer:
-        hip_smoothed_history.pop(0)  # 移除最舊的數據
-    # 將 ankle_smoothed 添加到歷史數據緩衝區
-    ankle_smoothed_history.append(abs(ankle_smoothed))  # 保存絕對值
-    if len(ankle_smoothed_history) > display_buffer:
-        ankle_smoothed_history.pop(0)  # 移除最舊的數據
+    ###-------繪製左下角滾動軸------_______________________________________________________________________________________________________________________
+    COG_smoothed_history.append(abs(COG_tangential_vel))
+    COG_angle_history.append(COG_angle)
+
+    if len(COG_smoothed_history) > display_buffer:
+        COG_smoothed_history.pop(0)
+        COG_angle_history.pop(0)
 
     # 創建 Matplotlib 圖像
     fig, ax = plt.subplots(figsize=(4, 3), dpi=100)
-    ax.plot(hip_smoothed_history, color='b', label='Hip')  # 繪製折線圖
-    ax.plot(ankle_smoothed_history, color='r', label='Ankle')  # 繪製折線圖
+    x_values = np.arange(len(COG_smoothed_history))
+    ax.plot(x_values, COG_smoothed_history, color='r', label='COG')  # 繪製折線圖
 
     # 設定軸範圍
     ax.set_xlim(0, display_buffer)
-    ax.set_ylim(0, 1000)  # 縱軸最大值 1000
-    # ax.set_yticks(np.arange(100, 1001, 100))
-    ax.set_yticks([250, 500, 750, 1000])
+    ax.set_ylim(0, 600)  # 縱軸最大值 600
+    ax.set_yticks([150, 300, 450, 600])
     ax.tick_params(axis='y', labelsize=15)
+    ax.set_title("COG velocity", fontsize=15)
+    ax.set_xticks([]) # 移除 x  軸的標籤
 
-    ax.set_title("Rotation Speed (deg/s)", fontsize=15)
 
-    # 移除 x  軸的標籤
-    ax.set_xticks([])
-    # 添加圖例（標示顏色）
-    ax.legend(loc="upper left", fontsize=15)  # 將圖例放在左上角
+    # 判斷哪些點需要填充黃色背景
+    yellow_regions = [((180 <= angle <= 240) or (angle >= 300)) for angle in COG_angle_history]
+    yellow_regions = np.array(yellow_regions)
+    ax.fill_between(x_values, 0, 600, where=yellow_regions,
+                    facecolor=(1, 213/255, 99/255), alpha=0.5)
+    
+    # 計算歷史幀數列表
+    history_frame_indices = list(range(frame_count - len(COG_smoothed_history) + 1, frame_count + 1))
 
-    # 將 Matplotlib 圖像保存到內存中
+    # 使用 COG_flight_height_frames，圈出要標記的數據點
+    for idx, frame_idx in enumerate(history_frame_indices):
+        if frame_idx in COG_flight_height_frames:
+            y_pos = COG_smoothed_history[idx]
+            # ax.plot(idx, y_pos, 'o', color='b', markersize=8)  # 用藍色圈圈標記
+
+    # 在更新 COG_flight_height_frames 後，確保長度不超過某個值（例如 100）
+    max_frames_length = 100
+    if len(COG_flight_height_frames) > max_frames_length:
+        COG_flight_height_frames = COG_flight_height_frames[-max_frames_length:]
+        
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.1)
     buf.seek(0)
@@ -444,4 +614,11 @@ def draw_on_frame_with_plot(frame, hip_smoothed, ankle_smoothed):
     # 將折線圖嵌入到原始影像的左下角
     frame[frame.shape[0]-300:frame.shape[0], 0:400] = plot_img_resized
 
-    return frame
+
+    return frame, rot_origin,  rot_origin_proj, COG_angle, flight_vel, COG_height, COG_cal_height
+
+
+
+
+
+
